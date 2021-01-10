@@ -13,7 +13,6 @@ Vector cubePos[8] = {
     {2.5f, 5.0f, -1.5f},
     {-2.5f, 5.0f, -1.5f},
 };
-Vector cubeBuff[8];
 Edge cubeIdx[12] = {
     {0, 1, TFT_YELLOW},
     {1, 2, TFT_YELLOW},
@@ -54,7 +53,6 @@ Vector planePos[14] = {
     {-0.2f, -0.4f, -1.5f}, // 12
     {-1.2f, -0.6f, -1.2f}, // 13
 };
-Vector planeBuff[14];
 Edge planeIdx[] = {
     // 6
     {1, 5, TFT_SKYBLUE},
@@ -96,7 +94,6 @@ Vector pentaPos[5] = {
     {-0.5877f, 0.0f, -0.809f},
     {-0.951f, 0.0f, 0.309f},
 };
-Vector pentaBuff[5];
 Edge pentaIdx[] = {
     {0, 1, TFT_YELLOW},
     {1, 2, TFT_YELLOW},

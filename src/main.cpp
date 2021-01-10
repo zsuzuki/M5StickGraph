@@ -13,6 +13,7 @@ static constexpr const float Top = ((float)ScreenHeight / (float)ScreenWidth);
 static constexpr const float Bottom = -((float)ScreenHeight / (float)ScreenWidth);
 static constexpr const float Near = 1.0f;
 static constexpr const float Far = 100.0f;
+static constexpr const int NbTransBuff = 1024;
 
 #include "def.h"
 //
@@ -22,17 +23,17 @@ ModelUnit kage = {
     &cubeMdl,
     {0.0f, 0.0f, 7.0f},
     {0.0f, 0.0f, 0.0f, 1.0f},
-    cubeBuff};
+    -1};
 ModelUnit model = {
     &planeMdl,
     {0.0f, 0.0f, 7.0f},
     {0.0f, 0.0f, 0.0f, 1.0f},
-    planeBuff};
+    -1};
 ModelUnit cursor = {
     &pentaMdl,
     {0.0f, 0.0f, 0.0f},
     {0.0f, 0.0f, 0.0f, 1.0f},
-    pentaBuff};
+    -1};
 
 // 透視変換行列
 const Matrix frustum = {
@@ -62,53 +63,12 @@ Quaternion modelViewQ, modelViewQN;
 Matrix modelView;
 Matrix mvStack[2];
 int mvStackIdx = 0;
+Vector transBuffer[NbTransBuff];
+int transIdx;
 
 // 画面消去用
-struct DrawBBox
+struct DrawBBox : public BoundingBox<ScreenWidth, ScreenHeight>
 {
-  int left, right, top, bottom;
-  int dl, dt, w, h;
-
-  void clear()
-  {
-    left = 80;
-    right = 0;
-    top = 160;
-    bottom = 0;
-  }
-  void update(int x, int y)
-  {
-    if (left > x)
-      left = x;
-    if (right < x)
-      right = x;
-    if (top > y)
-      top = y;
-    if (bottom < y)
-      bottom = y;
-  }
-
-  void fix()
-  {
-    w = right - left;
-    h = bottom - top;
-    if (w < 0)
-    {
-      w = -w;
-      dl = right;
-    }
-    else
-      dl = left;
-    if (h < 0)
-    {
-      h = -h;
-      dt = bottom;
-    }
-    else
-      dt = top;
-    w++;
-    h++;
-  }
   void draw()
   {
     lcd.fillRect(dl, dt, w, h, TFT_BLACK);
@@ -283,9 +243,6 @@ void TransposeMatrix(Matrix &m)
   m[6] = m21;
   m[8] = m02;
   m[9] = m12;
-  // m[3] = -m[3];
-  // m[7] = -m[7];
-  // m[11] = -m[11];
 }
 
 // マトリクスでの回転
@@ -322,11 +279,24 @@ void MultiMatrix(Matrix &rm, const Matrix &m0, const Matrix &m1)
 void TranslateView(Vector &r, const Vector &v)
 {
   Translate(r, frustum, v);
-  constexpr const float halfW = (float)ScreenWidth * 0.5f;
-  constexpr const float halfH = (float)ScreenHeight * 0.5f;
 
-  r[0] = (r[0] / r[2]) * halfW + halfW;
-  r[1] = (r[1] / r[2]) * halfH + halfH;
+  auto z = r[2];
+  if (z < 0.0f)
+  {
+    auto x = r[0] / z;
+    auto y = r[1] / z;
+    // 中心のずれた行列には対応しない
+    if (abs(x) < Right && abs(y) < Top)
+    {
+      constexpr const float halfW = (float)ScreenWidth * 0.5f;
+      constexpr const float halfH = (float)ScreenHeight * 0.5f;
+
+      r[0] = x * halfW + halfW;
+      r[1] = y * halfH + halfH;
+    }
+    else
+      r[2] = 1.0f;
+  }
 }
 
 // 外積
@@ -386,20 +356,34 @@ void PopMV()
   memcpy(modelView, t, sizeof(Matrix));
 }
 
+//
+void transSetup()
+{
+  transIdx = 0;
+}
+
 // モデル座標変換
 void CalcModel(ModelUnit &mdlunit)
 {
+  auto &mdl = *mdlunit.model;
+  if (transIdx + mdl.numPos >= NbTransBuff)
+  {
+    // 頂点バッファが足りない
+    mdlunit.transIdx = -1;
+    return;
+  }
+
   PushMV();
   MoveMatrix(modelView, mdlunit.position[0], mdlunit.position[1], mdlunit.position[2]);
   Matrix p;
   Quat2Mat(p, mdlunit.posture);
   RotateMatrix(modelView, p);
-  auto &mdl = *mdlunit.model;
+  mdlunit.transIdx = transIdx;
   for (int i = 0; i < mdl.numPos; i++)
   {
     Vector dst;
     Translate(dst, modelView, mdl.point[i]);
-    auto &tb = mdlunit.transBuff[i];
+    auto &tb = transBuffer[transIdx++];
     TranslateView(tb, dst);
     dbb.update(tb[0], tb[1]);
   }
@@ -409,17 +393,24 @@ void CalcModel(ModelUnit &mdlunit)
 // モデル描画
 void DrawModel(const ModelUnit &mdlunit)
 {
+  if (mdlunit.transIdx < 0)
+  {
+    // バッファが足りない or 変換されていない
+    return;
+  }
   auto &mdl = *mdlunit.model;
+  Vector *transBuff = &transBuffer[mdlunit.transIdx];
   for (int i = 0; i < mdl.numEdge; i++)
   {
     auto &e = mdl.edge[i];
-    auto p0 = mdlunit.transBuff[e.p0];
-    auto p1 = mdlunit.transBuff[e.p1];
-    lcd.drawLine(p0[0], p0[1], p1[0], p1[1], e.color);
+    auto p0 = transBuff[e.p0];
+    auto p1 = transBuff[e.p1];
+    if (p0[2] < 0.0f && p1[2] < 0.0f)
+      lcd.drawLine(p0[0], p0[1], p1[0], p1[1], e.color);
   }
 }
 
-//
+// アプリ初期化
 void setup()
 {
   lcd.init();
@@ -454,6 +445,7 @@ float aY = 0;
 unsigned long dt = 0;
 unsigned long udt = 0;
 
+// アプリループ
 void loop()
 {
   auto st = millis();
@@ -481,27 +473,29 @@ void loop()
   mY += aY * 0.5f;
   aX *= 0.98f;
   aY *= 0.98f;
-  if (mX < 5.0f)
+  constexpr const float margin = 5.0f;
+  if (mX < margin)
   {
-    mX = 5.0f;
+    mX = margin;
     aX = -aX;
   }
-  else if (mX > 74.0f)
+  else if (mX > (ScreenWidth - margin - 1.0f))
   {
-    mX = 74.0f;
+    mX = ScreenWidth - margin - 1.0f;
     aX = -aX;
   }
-  if (mY < 20.0f)
+  if (mY < margin)
   {
-    mY = 20.0f;
+    mY = margin;
     aY = -aY;
   }
-  else if (mY > 154.0f)
+  else if (mY > (ScreenHeight - margin - 1.0f))
   {
-    mY = 154.0f;
+    mY = ScreenHeight - margin - 1.0f;
     aY = -aY;
   }
 
+  transSetup();
   {
     constexpr const float Pi = 3.14159265f;
     static int cnt = 0;
