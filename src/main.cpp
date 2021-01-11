@@ -18,21 +18,25 @@ static constexpr const int NbTransBuff = 1024;
 #include "def.h"
 //
 #include "modeldata.h"
+#include "mapdata.h"
 
 ModelUnit kage = {
     &cubeMdl,
-    {0.0f, 0.0f, 7.0f},
+    {0.0f, 0.0f, 10.0f},
     {0.0f, 0.0f, 0.0f, 1.0f},
+    {1.0f, 1.0f, 1.5f},
     -1};
 ModelUnit model = {
     &planeMdl,
-    {0.0f, 0.0f, 7.0f},
+    {0.0f, 0.0f, 0.0f},
     {0.0f, 0.0f, 0.0f, 1.0f},
+    {2.0f, 1.8f, 2.0f},
     -1};
 ModelUnit cursor = {
     &pentaMdl,
     {0.0f, 0.0f, 0.0f},
     {0.0f, 0.0f, 0.0f, 1.0f},
+    {1.0f, 1.0f, 1.0f},
     -1};
 
 // 透視変換行列
@@ -260,6 +264,20 @@ void RotateMatrix(Matrix &t, const Matrix &r)
   }
 }
 
+// マトリクスのスケール
+void ScaleMatrix(Matrix &m, float x, float y, float z)
+{
+  m[0] *= x;
+  m[1] *= y;
+  m[2] *= z;
+  m[4] *= x;
+  m[5] *= y;
+  m[6] *= z;
+  m[8] *= x;
+  m[9] *= y;
+  m[10] *= z;
+}
+
 // マトリクス同士の乗算
 void MultiMatrix(Matrix &rm, const Matrix &m0, const Matrix &m1)
 {
@@ -313,35 +331,39 @@ void OuterVector(Vector &r, const Vector &v0, const Vector &v1)
 // カメラ
 void SetCamera(const Vector &eye, const Vector &target, const Vector &up)
 {
-  float evx = target[0] - eye[0];
-  float evy = target[1] - eye[1];
-  float evz = target[2] - eye[2];
+  float ex = -eye[0];
+  float ey = -eye[1];
+  float ez = -eye[2];
+  float evx = target[0] + ex;
+  float evy = target[1] + ey;
+  float evz = target[2] + ez;
   float evl = 1.0f / sqrt(evx * evx + evy * evy + evz * evz);
   Vector front, side, tup;
   front[0] = evx * evl;
   front[1] = evy * evl;
   front[2] = evz * evl;
-  OuterVector(side, front, up);
+  OuterVector(side, up, front);
   UnitVector(side);
-  OuterVector(tup, side, front);
+  OuterVector(tup, front, side);
   UnitVector(tup);
   modelView[0] = side[0];
-  modelView[1] = side[1];
-  modelView[2] = side[2];
-  modelView[3] = eye[0];
-  modelView[4] = tup[0];
+  modelView[1] = tup[0];
+  modelView[2] = front[0];
+  modelView[3] = 0.0f;
+  modelView[4] = side[1];
   modelView[5] = tup[1];
-  modelView[6] = tup[2];
-  modelView[7] = eye[1];
-  modelView[8] = front[0];
-  modelView[9] = front[1];
+  modelView[6] = front[1];
+  modelView[7] = 0.0f;
+  modelView[8] = side[2];
+  modelView[9] = tup[2];
   modelView[10] = front[2];
-  modelView[11] = eye[2];
+  modelView[11] = 0.0f;
   modelView[12] = 0.0f;
   modelView[13] = 0.0f;
   modelView[14] = 0.0f;
   modelView[15] = 1.0f;
   TransposeMatrix(modelView);
+  MoveMatrix(modelView, ex, ey, ez);
 }
 
 // マトリックススタック操作
@@ -378,6 +400,7 @@ void CalcModel(ModelUnit &mdlunit)
   Matrix p;
   Quat2Mat(p, mdlunit.posture);
   RotateMatrix(modelView, p);
+  ScaleMatrix(modelView, mdlunit.scale[0], mdlunit.scale[1], mdlunit.scale[2]);
   mdlunit.transIdx = transIdx;
   for (int i = 0; i < mdl.numPos; i++)
   {
@@ -410,6 +433,56 @@ void DrawModel(const ModelUnit &mdlunit)
   }
 }
 
+//
+void CalcMap(MapData &mapdata)
+{
+  static float v = 0.0f;
+  for (int i = 0; i < mapdata.nbBlock; i++)
+  {
+    auto &block = mapdata.blocks[i];
+    if ((v - 10.0f) > block.pos || (v + 50.0f) < block.pos)
+    {
+      block.draw = false;
+      continue;
+    }
+    block.draw = true;
+    PushMV();
+    MoveMatrix(modelView, 0.0f, 0.0f, block.pos - v);
+    for (int j = 0; j < block.nbModels; j++)
+    {
+      int mi = block.modelList[j];
+      auto &mdl = mapdata.models[mi];
+      int oi = mdl.transIdx;
+      CalcModel(mdl);
+      block.idxList[j] = mdl.transIdx;
+      mdl.transIdx = oi;
+    }
+    PopMV();
+  }
+  v += 0.2f;
+  if (v > mapdata.length)
+    v = 0.0f;
+}
+//
+void DrawMap(MapData &mapdata)
+{
+  for (int i = 0; i < mapdata.nbBlock; i++)
+  {
+    auto &block = mapdata.blocks[i];
+    if (block.draw == false)
+      continue;
+    for (int j = 0; j < block.nbModels; j++)
+    {
+      int mi = block.modelList[j];
+      auto &mdl = mapdata.models[mi];
+      int oi = mdl.transIdx;
+      mdl.transIdx = block.idxList[j];
+      DrawModel(mdl);
+      mdl.transIdx = oi;
+    }
+  }
+}
+
 // アプリ初期化
 void setup()
 {
@@ -427,72 +500,25 @@ void setup()
   delay(100);
 }
 
-float accX = 0;
-float accY = 0;
-float accZ = 0;
-
-float gyroX = 0;
-float gyroY = 0;
-float gyroZ = 0;
-
-float mX = 80;
-float mY = 40;
-float omX = 80;
-float omY = 40;
-float aX = 0;
-float aY = 0;
-
-unsigned long dt = 0;
-unsigned long udt = 0;
-
 // アプリループ
 void loop()
 {
   auto st = millis();
 
+  static unsigned long dt = 0;
+  static unsigned long udt = 0;
+  static float accX = 0.0f;
+  static float accY = 0.0f;
+  static float accZ = 0.0f;
+  static float gyroX = 0.0f;
+  static float gyroY = 0.0f;
+  static float gyroZ = 0.0f;
+
   M5.MPU6886.getGyroData(&gyroX, &gyroY, &gyroZ);
   M5.MPU6886.getAccelData(&accX, &accY, &accZ);
 
-  //FastLED.clear();
-  //for (int i = 0; i < NUM_LEDS; i++) {
-  //leds[i] = CRGB( 0, 255, 0);
-  //FastLED.show();
-  //delay(100);
-  //}
-
   if (digitalRead(M5_BUTTON_HOME) == LOW)
   {
-    mX = 80;
-    mY = 40;
-  }
-  omX = mX;
-  omY = mY;
-  aX += accX * 2.0f;
-  aY += accY * 2.0f;
-  mX -= aX * 0.5f;
-  mY += aY * 0.5f;
-  aX *= 0.98f;
-  aY *= 0.98f;
-  constexpr const float margin = 5.0f;
-  if (mX < margin)
-  {
-    mX = margin;
-    aX = -aX;
-  }
-  else if (mX > (ScreenWidth - margin - 1.0f))
-  {
-    mX = ScreenWidth - margin - 1.0f;
-    aX = -aX;
-  }
-  if (mY < margin)
-  {
-    mY = margin;
-    aY = -aY;
-  }
-  else if (mY > (ScreenHeight - margin - 1.0f))
-  {
-    mY = ScreenHeight - margin - 1.0f;
-    aY = -aY;
   }
 
   transSetup();
@@ -503,23 +529,15 @@ void loop()
     cnt = (cnt + 1) % 360;
 
     float rad = rb * Pi;
-    float prad = rb * Pi * 2.0f;
 
     // object
     model.posture[0] = 0.0f;
     model.posture[1] = sin(rad);
     model.posture[2] = 0.0f;
     model.posture[3] = cos(rad);
-    model.position[0] = cos(prad) * 4.0f;
-    model.position[1] = 0.0f;
-    model.position[2] = sin(prad) * 4.0f + 7.0f;
-    cursor.posture[0] = 0.7071f;
-    cursor.posture[1] = 0.0f;
-    cursor.posture[2] = 0.0f;
-    cursor.posture[3] = 0.7071f;
-    cursor.position[0] = mX / 16.0f - 2.5f;
-    cursor.position[1] = -(mY / 16.0f - 5.0f);
-    cursor.position[2] = 7.0f;
+    model.position[0] = 0.0f;
+    model.position[1] = 2.0f;
+    model.position[2] = 9.0f;
     // camera
     Quaternion rot, rotn, rotx, roty;
     int rxi = max(min(accZ * 50.0f, 100.0f), -100.0f);
@@ -537,7 +555,7 @@ void loop()
     QuatMul(rot, rotx, roty);
     QuatUnit(rot);
     QuatNeg(rotn, rot);
-    Quaternion te, ev = {0.0f, 0.0f, -8.0f, 0.0f}, eu = {0.0f, 1.0f, 0.0f, 0.0f};
+    Quaternion te, ev = {0.0f, 5.0f, -10.0f, 0.0f}, eu = {0.0f, 1.0f, 0.0f, 0.0f};
     QuatMul(te, rot, ev);
     QuatMul(ev, te, rotn);
     QuatMul(te, rot, eu);
@@ -545,22 +563,20 @@ void loop()
     Vector eye, up;
     eye[0] = ev[0];
     eye[1] = ev[1];
-    eye[2] = ev[2] + 7.0f;
+    eye[2] = ev[2] + 10.0f;
     up[0] = eu[0];
     up[1] = eu[1];
     up[2] = eu[2];
-    Vector tgt = {0.0f, 0.0f, 7.0f};
+    Vector tgt = {0.0f, 2.0f, 10.0f};
     SetCamera(eye, tgt, up);
     // display
+    CalcMap(mData);
     CalcModel(model);
-    CalcModel(kage);
-    CalcModel(cursor);
   }
 
   udt = millis() - st;
   lcd.startWrite();
   {
-    //lcd.fillRect(0, 0, 80, 160, TFT_NAVY);
     dbb.draw();
     dbb.fix();
     dbb.clear();
@@ -568,11 +584,11 @@ void loop()
     lcd.fillRect(0, 5, udt * 2, 6, TFT_GREEN);
     lcd.fillRect(udt * 2 + 1, 5, dt * 2, 6, TFT_RED);
 
+    DrawMap(mData);
     DrawModel(model);
-    DrawModel(kage);
-    DrawModel(cursor);
   }
   lcd.endWrite();
   dt = millis() - st;
-  delay(16 - dt);
+  if (dt < 15)
+    delay(16 - dt);
 }

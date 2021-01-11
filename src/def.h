@@ -27,7 +27,27 @@ struct ModelUnit
     Model *model;
     Vector position;
     Quaternion posture;
+    Vector scale;
     int transIdx;
+};
+
+// マップ1ブロック
+struct MapBlock
+{
+    int *modelList;
+    int *idxList;
+    float pos;
+    int nbModels;
+    bool draw;
+};
+
+// マップデータ
+struct MapData
+{
+    MapBlock *blocks;
+    ModelUnit *models;
+    float length;
+    int nbBlock;
 };
 
 // バウンディングボックス
