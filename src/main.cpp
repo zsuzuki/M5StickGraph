@@ -20,17 +20,11 @@ static constexpr const int NbTransBuff = 1024;
 #include "modeldata.h"
 #include "mapdata.h"
 
-ModelUnit kage = {
-    &cubeMdl,
-    {0.0f, 0.0f, 10.0f},
-    {0.0f, 0.0f, 0.0f, 1.0f},
-    {1.0f, 1.0f, 1.5f},
-    -1};
 ModelUnit model = {
     &planeMdl,
     {0.0f, 0.0f, 0.0f},
     {0.0f, 0.0f, 0.0f, 1.0f},
-    {2.0f, 1.8f, 2.0f},
+    {1.0f, 1.0f, 1.0f},
     -1};
 ModelUnit cursor = {
     &pentaMdl,
@@ -68,17 +62,49 @@ Matrix modelView;
 Matrix mvStack[2];
 int mvStackIdx = 0;
 Vector transBuffer[NbTransBuff];
+Vector eraseBuffer[NbTransBuff];
 int transIdx;
 
 // 画面消去用
-struct DrawBBox : public BoundingBox<ScreenWidth, ScreenHeight>
+struct DrawBBox : public BoundingBox
 {
+  DrawBBox() : BoundingBox(ScreenWidth, ScreenHeight) {}
+
   void draw()
   {
-    lcd.fillRect(dl, dt, w, h, TFT_BLACK);
+    // 一応データは取るけど描画が遅いので消去には使わない
+    // if (enabled)
+    //   lcd.fillRect(dl, dt, w, h, TFT_BLACK);
+    enabled = false;
   }
 };
-DrawBBox dbb;
+
+DrawBBox bboxList[64];
+int nbUseBBox;
+int nbReqBBox;
+
+// 前のフレームで描画した部分を消去
+void clearPrevDraw()
+{
+  for (int i = 0; i < nbUseBBox; i++)
+  {
+    auto &bb = bboxList[i];
+    bb.draw();
+  }
+  for (int i = 0; i < nbReqBBox; i++)
+  {
+    auto &bb = bboxList[i];
+    bb.fix();
+    bb.clear();
+  }
+  nbUseBBox = nbReqBBox;
+  nbReqBBox = 0;
+}
+//
+DrawBBox &getBBox()
+{
+  return bboxList[nbReqBBox++];
+}
 
 //
 void IdentityMatrix(Matrix &m)
@@ -402,6 +428,7 @@ void CalcModel(ModelUnit &mdlunit)
   RotateMatrix(modelView, p);
   ScaleMatrix(modelView, mdlunit.scale[0], mdlunit.scale[1], mdlunit.scale[2]);
   mdlunit.transIdx = transIdx;
+  auto &dbb = getBBox();
   for (int i = 0; i < mdl.numPos; i++)
   {
     Vector dst;
@@ -413,6 +440,14 @@ void CalcModel(ModelUnit &mdlunit)
   PopMV();
 }
 
+// 描画したエッジ単位で消去する
+struct EraseEdge
+{
+  float x0, y0, x1, y1;
+};
+EraseEdge eraseEdge[1024];
+int nbErase = 0;
+
 // モデル描画
 void DrawModel(const ModelUnit &mdlunit)
 {
@@ -422,15 +457,92 @@ void DrawModel(const ModelUnit &mdlunit)
     return;
   }
   auto &mdl = *mdlunit.model;
-  Vector *transBuff = &transBuffer[mdlunit.transIdx];
+  Vector *renderBuff = transBuffer + mdlunit.transIdx;
   for (int i = 0; i < mdl.numEdge; i++)
   {
     auto &e = mdl.edge[i];
-    auto p0 = transBuff[e.p0];
-    auto p1 = transBuff[e.p1];
+    auto p0 = renderBuff[e.p0];
+    auto p1 = renderBuff[e.p1];
     if (p0[2] < 0.0f && p1[2] < 0.0f)
-      lcd.drawLine(p0[0], p0[1], p1[0], p1[1], e.color);
+    {
+      // 描画しつつそのエッジ情報を保存する
+      auto x0 = p0[0];
+      auto y0 = p0[1];
+      auto x1 = p1[0];
+      auto y1 = p1[1];
+      lcd.drawLine(x0, y0, x1, y1, e.color);
+      auto &ee = eraseEdge[nbErase++];
+      ee.x0 = x0;
+      ee.y0 = y0;
+      ee.x1 = x1;
+      ee.y1 = y1;
+    }
   }
+}
+
+// 描画したエッジを消去
+void eraseEdges()
+{
+  for (int i = 0; i < nbErase; i++)
+  {
+    auto &e = eraseEdge[i];
+    lcd.drawLine(e.x0, e.y0, e.x1, e.y1, TFT_BLACK);
+  }
+  nbErase = 0;
+}
+
+// マップ生成
+MapData *genMap(const MapGenDef *mgd)
+{
+  auto mapData = new MapData;
+  const int nbMdl = mgd->nbMdlList;
+  const int nbInBlk = mgd->nbMdlInBlock;
+  const int nbBlk = mgd->nbBlocks;
+  const auto nbTotalMdl = nbInBlk * nbBlk;
+  const auto length = mgd->blockLength;
+  mapData->blocks = new MapBlock[nbBlk];
+  mapData->models = new ModelUnit[nbTotalMdl];
+  mapData->nbBlock = mgd->nbBlocks;
+  randomSeed(millis());
+  // generate model
+  for (int mi = 0; mi < nbTotalMdl; mi++)
+  {
+    auto &mdl = mapData->models[mi];
+    mdl.model = mgd->mdlList[mi % nbMdl];
+    auto px = (float)(random(0, 2000) - 1000) * 0.001f;
+    auto py = (float)(random(0, 2000) - 1000) * 0.001f;
+    auto pz = (float)(random(0, 2000) - 1000) * 0.001f;
+    mdl.position[0] = px * mgd->blockWidth;
+    mdl.position[1] = py * mgd->blockHeight;
+    mdl.position[2] = pz * length;
+    mdl.transIdx = -1;
+    // TODO
+    mdl.posture[0] = 0.0f;
+    mdl.posture[1] = 0.0f;
+    mdl.posture[2] = 0.0f;
+    mdl.posture[3] = 1.0f;
+    mdl.scale[0] = 1.0f;
+    mdl.scale[1] = 1.0f;
+    mdl.scale[2] = 1.0f;
+  }
+  // generate block
+  constexpr float offsetLength = 20.0f;
+  mapData->length = offsetLength;
+  for (int bi = 0; bi < nbBlk; bi++)
+  {
+    auto &block = mapData->blocks[bi];
+    block.modelList = new int[nbInBlk];
+    for (int i = 0; i < nbInBlk; i++)
+    {
+      block.modelList[i] = bi * nbInBlk + i;
+    }
+    block.idxList = new int[nbInBlk];
+    block.nbModels = nbInBlk;
+    block.pos = bi * length + offsetLength;
+
+    mapData->length += mgd->blockLength;
+  }
+  return mapData;
 }
 
 //
@@ -494,9 +606,15 @@ void setup()
 
   M5.MPU6886.Init();
 
-  dbb.clear();
-  dbb.fix();
+  for (auto &bb : bboxList)
+  {
+    bb.clear();
+    bb.fix();
+  }
+  nbUseBBox = 0;
+  nbReqBBox = 0;
 
+  mapData = genMap(&mGenData);
   delay(100);
 }
 
@@ -536,8 +654,8 @@ void loop()
     model.posture[2] = 0.0f;
     model.posture[3] = cos(rad);
     model.position[0] = 0.0f;
-    model.position[1] = 2.0f;
-    model.position[2] = 9.0f;
+    model.position[1] = 2.5f;
+    model.position[2] = 3.0f;
     // camera
     Quaternion rot, rotn, rotx, roty;
     int rxi = max(min(accZ * 50.0f, 100.0f), -100.0f);
@@ -570,21 +688,20 @@ void loop()
     Vector tgt = {0.0f, 2.0f, 10.0f};
     SetCamera(eye, tgt, up);
     // display
-    CalcMap(mData);
+    CalcMap(*mapData);
     CalcModel(model);
   }
 
   udt = millis() - st;
   lcd.startWrite();
   {
-    dbb.draw();
-    dbb.fix();
-    dbb.clear();
+    clearPrevDraw();
+    eraseEdges();
     lcd.fillRect(0, 4, 32, 8, TFT_LIGHTGREY);
     lcd.fillRect(0, 5, udt * 2, 6, TFT_GREEN);
     lcd.fillRect(udt * 2 + 1, 5, dt * 2, 6, TFT_RED);
 
-    DrawMap(mData);
+    DrawMap(*mapData);
     DrawModel(model);
   }
   lcd.endWrite();

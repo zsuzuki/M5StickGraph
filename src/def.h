@@ -41,21 +41,15 @@ struct MapBlock
     bool draw;
 };
 
-// マップデータ
-struct MapData
-{
-    MapBlock *blocks;
-    ModelUnit *models;
-    float length;
-    int nbBlock;
-};
-
 // バウンディングボックス
-template <int W, int H>
 struct BoundingBox
 {
     int left, right, top, bottom;
     int dl, dt, w, h;
+    int W, H;
+    bool enabled;
+
+    BoundingBox(int ww, int hh) : W(ww), H(hh) { clear(); }
 
     void clear()
     {
@@ -97,5 +91,27 @@ struct BoundingBox
             dt = top;
         w++;
         h++;
+        enabled = (dl < W && dt < H && (dl + W >= 0) && (dt + H >= 0));
     }
+};
+
+// マップデータ
+struct MapData
+{
+    MapBlock *blocks;
+    ModelUnit *models;
+    float length;
+    int nbBlock;
+};
+
+// マップ生成データ
+struct MapGenDef
+{
+    Model **mdlList;
+    int nbMdlList;
+    float blockWidth;
+    float blockHeight;
+    float blockLength;
+    int nbMdlInBlock;
+    int nbBlocks;
 };
